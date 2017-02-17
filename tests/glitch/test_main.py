@@ -5,7 +5,6 @@ import unittest
 from unittest.mock import patch
 import yaml
 
-from juju.application import Application
 from juju.model import Model
 from juju.delta import ApplicationDelta, UnitDelta
 
@@ -52,39 +51,42 @@ class TestPerformAction(unittest.TestCase):
 
     def test_perform_action_happy_path(self):
         juju_model = make_test_model()
-        self.assertEqual(('kill_juju_agent', False),
-            self.loop.run_until_complete(perform_action(
-                                         kill_juju_agent(), juju_model,
-                                         self.rule)))
+        self.assertEqual(
+            ('kill_juju_agent', False),
+            self.loop.run_until_complete(
+                perform_action(kill_juju_agent(), juju_model, self.rule)))
 
     def test_perform_action_no_objects(self):
         juju_model = make_test_model(foo_unit=False)
-        with self.assertRaisesRegex(NoObjects,
+        with self.assertRaisesRegex(
+                NoObjects,
                 r"Could not run kill_juju_agent. No objects for selectors"):
-            self.loop.run_until_complete(perform_action(kill_juju_agent(),
-                                                        juju_model, self.rule))
+            self.loop.run_until_complete(perform_action(
+                kill_juju_agent(), juju_model, self.rule))
 
     def test_perform_action_error(self):
         juju_model = make_test_model()
         async def kill_raise(a, b, c):
             raise Exception
-        with patch.dict(actions.Actions, {'kill_juju_agent': {'func':
-            kill_raise}}):
-            self.assertEqual(('kill_raise', True),
-                self.loop.run_until_complete(perform_action(
-                                             kill_juju_agent(), juju_model,
-                                             self.rule)))
+        with patch.dict(actions.Actions, {'kill_juju_agent': {
+                'func': kill_raise,
+                }}):
+            self.assertEqual(
+                ('kill_raise', True),
+                self.loop.run_until_complete(
+                    perform_action(kill_juju_agent(), juju_model, self.rule)))
 
     def test_perform_action_timeout_error(self):
         juju_model = make_test_model()
         async def kill_raise(a, b, c):
             raise asyncio.TimeoutError()
-        with patch.dict(actions.Actions, {'kill_juju_agent': {'func':
-            kill_raise}}):
-            self.assertEqual(('kill_raise', True),
-                self.loop.run_until_complete(perform_action(
-                                             kill_juju_agent(), juju_model,
-                                             self.rule)))
+        with patch.dict(actions.Actions, {'kill_juju_agent': {
+                'func': kill_raise,
+                }}):
+            self.assertEqual(
+                ('kill_raise', True),
+                self.loop.run_until_complete(
+                    perform_action(kill_juju_agent(), juju_model, self.rule)))
 
 
 class TestGlitch(unittest.TestCase):
