@@ -1,6 +1,8 @@
 import asyncio
+import logging
 from tempfile import NamedTemporaryFile
 import unittest
+from unittest.mock import patch
 import yaml
 
 from juju.application import Application
@@ -8,6 +10,7 @@ from juju.model import Model
 from juju.delta import ApplicationDelta, UnitDelta
 
 from matrix import model
+from matrix.tasks.glitch import actions
 from matrix.bus import Bus
 from matrix.tasks.glitch.main import (
     glitch,
@@ -44,12 +47,15 @@ class TestPerformAction(unittest.TestCase):
     def setUp(self):
         self.rule = model.Rule(model.Task(command='glitch',
                                           args={'path': None}))
+        self.rule.log.setLevel(logging.CRITICAL)
         self.loop = asyncio.get_event_loop()
 
     def test_perform_action_happy_path(self):
         juju_model = make_test_model()
-        self.loop.run_until_complete(perform_action(kill_juju_agent(),
-                                                    juju_model, self.rule))
+        self.assertEqual(('kill_juju_agent', False),
+            self.loop.run_until_complete(perform_action(
+                                         kill_juju_agent(), juju_model,
+                                         self.rule)))
 
     def test_perform_action_no_objects(self):
         juju_model = make_test_model(foo_unit=False)
@@ -58,6 +64,27 @@ class TestPerformAction(unittest.TestCase):
             self.loop.run_until_complete(perform_action(kill_juju_agent(),
                                                         juju_model, self.rule))
 
+    def test_perform_action_error(self):
+        juju_model = make_test_model()
+        async def kill_raise(a, b, c):
+            raise Exception
+        with patch.dict(actions.Actions, {'kill_juju_agent': {'func':
+            kill_raise}}):
+            self.assertEqual(('kill_raise', True),
+                self.loop.run_until_complete(perform_action(
+                                             kill_juju_agent(), juju_model,
+                                             self.rule)))
+
+    def test_perform_action_timeout_error(self):
+        juju_model = make_test_model()
+        async def kill_raise(a, b, c):
+            raise asyncio.TimeoutError()
+        with patch.dict(actions.Actions, {'kill_juju_agent': {'func':
+            kill_raise}}):
+            self.assertEqual(('kill_raise', True),
+                self.loop.run_until_complete(perform_action(
+                                             kill_juju_agent(), juju_model,
+                                             self.rule)))
 
 
 class TestGlitch(unittest.TestCase):
