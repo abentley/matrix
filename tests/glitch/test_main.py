@@ -9,7 +9,55 @@ from juju.delta import ApplicationDelta, UnitDelta
 
 from matrix import model
 from matrix.bus import Bus
-from matrix.tasks.glitch.main import glitch
+from matrix.tasks.glitch.main import (
+    glitch,
+    NoObjects,
+    perform_action,
+    )
+
+
+def kill_juju_agent(application='foo'):
+    return {
+        'action': 'kill_juju_agent',
+        'selectors': [{
+            'selector': 'units',
+            'application': application,
+            }],
+        }
+
+
+def make_test_model(foo_unit=True):
+    juju_model = Model()
+    state = juju_model.state
+    state.apply_delta(ApplicationDelta(
+        ('application', 'type2', {'name': 'foo'})))
+    if foo_unit:
+        state.apply_delta(UnitDelta(('unit', 'type1', {
+            'name': 'steve',
+            'application': 'foo',
+            })))
+    return juju_model
+
+
+class TestPerformAction(unittest.TestCase):
+
+    def setUp(self):
+        self.rule = model.Rule(model.Task(command='glitch',
+                                          args={'path': None}))
+        self.loop = asyncio.get_event_loop()
+
+    def test_perform_action_happy_path(self):
+        juju_model = make_test_model()
+        self.loop.run_until_complete(perform_action(kill_juju_agent(),
+                                                    juju_model, self.rule))
+
+    def test_perform_action_no_objects(self):
+        juju_model = make_test_model(foo_unit=False)
+        with self.assertRaisesRegex(NoObjects,
+                r"Could not run kill_juju_agent. No objects for selectors"):
+            self.loop.run_until_complete(perform_action(kill_juju_agent(),
+                                                        juju_model, self.rule))
+
 
 
 class TestGlitch(unittest.TestCase):
@@ -26,23 +74,10 @@ class TestGlitch(unittest.TestCase):
 
         context = model.Context(loop, bus, suite, config, None)
 
-        juju_model = Model()
-        juju_model.state.apply_delta(ApplicationDelta(
-            ('application', 'type2', {'name': 'foo'})))
-        juju_model.state.apply_delta(UnitDelta(('unit', 'type1', {
-            'name': 'steve',
-            'application': 'foo',
-            })))
-
+        juju_model = make_test_model()
         context.juju_model = juju_model
 
-        plan = {'actions': [{
-            'action': 'kill_juju_agent',
-            'selectors': [{
-                'selector': 'units',
-                'application': 'foo',
-                }],
-            }]}
+        plan = {'actions': [kill_juju_agent()]}
 
         with NamedTemporaryFile() as plan_file:
             yaml.safe_dump(plan, plan_file, encoding='utf8')
