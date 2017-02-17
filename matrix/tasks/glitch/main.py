@@ -52,6 +52,57 @@ async def select(rule, model, selectors, objects=None,
     return cur
 
 
+async def execute_actions(actions, model, rule, exception, bus=None):
+    """Execute a glitch plan.
+
+    :param actions: A list of actions from a glitch plan.
+    :param model: A Juju model to apply the actions to.
+    :param rule: A model.Rule, typically used for logging.  Passed on to
+        Glitch actions.
+    :param exception: The exception to raise if errors are encountered.  If
+        None, no exception will be raised if errors are encountered.
+    :param bus: Bus to send glitch.activate events to.  If None, no events
+        will be sent.
+    """
+    # Execute glitch plan. We perform destructive operations here!
+    for action in actions:
+        actionf = Actions[action.pop('action')]['func']
+        selectors = action.pop('selectors')
+        # Find a set of units to act upon
+        objects = await select(rule, model, selectors)
+        if not objects:
+            # If we get an empty set of objects back, just skip this action.
+            rule.log.error(
+                "Could not run {}. No objects for selectors {}".format(
+                    actionf.__name__, selectors))
+            continue
+
+        # Run the specified action on those units
+        rule.log.info("GLITCHING {}: {}".format(actionf.__name__, objects))
+
+        errors = False
+        try:
+            await asyncio.wait_for(actionf(rule, model, objects, **action), 30)
+        except asyncio.TimeoutError:
+            rule.log.error("Timeout running {}".format(actionf.__name__))
+            errors = True
+        except Exception as e:
+            rule.log.exception(
+                "Exception while running {}: {} {}.".format(
+                    actionf.__name__, type(e), e))
+            errors = True
+        if errors and exception is not None:
+            raise exception
+
+        if bus is not None:
+            bus.dispatch(
+                origin="glitch",
+                payload={'action': actionf.__name__, **action},
+                kind="glitch.activate"
+            )
+        await asyncio.sleep(2, loop=model.loop)
+
+
 async def glitch(context, rule, task, event=None):
     """
     Perform a set of actions against a model, with a mind toward causing
@@ -98,44 +149,12 @@ async def glitch(context, rule, task, event=None):
         with glitch_output.open('w') as output_file:
             output_file.write(yaml.dump(glitch_plan))
 
-    # Execute glitch plan. We perform destructive operations here!
-    for action in glitch_plan['actions']:
-        actionf = Actions[action.pop('action')]['func']
-        selectors = action.pop('selectors')
-        # Find a set of units to act upon
-        objects = await select(rule, model, selectors)
-        if not objects:
-            # If we get an empty set of objects back, just skip this action.
-            rule.log.error(
-                "Could not run {}. No objects for selectors {}".format(
-                    actionf.__name__, selectors))
-            continue
-
-        # Run the specified action on those units
-        rule.log.info("GLITCHING {}: {}".format(actionf.__name__, objects))
-
-        errors = False
-        try:
-            await asyncio.wait_for(actionf(rule, model, objects, **action), 30)
-        except asyncio.TimeoutError:
-            rule.log.error("Timeout running {}".format(actionf.__name__))
-            errors = True
-        except Exception as e:
-            rule.log.exception(
-                "Exception while running {}: {} {}.".format(
-                    actionf.__name__, type(e), e))
-            errors = True
-        if errors and task.gating:
-            raise TestFailure(
-                task, "Exceptions were raised during glitch run.")
-
-        context.bus.dispatch(
-            origin="glitch",
-            payload={'action': actionf.__name__, **action},
-            kind="glitch.activate"
-        )
-        await asyncio.sleep(2, loop=context.loop)
-
+    if task.gating:
+        exception = TestFailure(
+                    task, "Exceptions were raised during glitch run.")
+    else:
+        exception = None
+    await execute_actions(glitch_plan['actions'], model, rule, exception,
+                          context.bus)
     rule.log.info("Finished glitch")
-
     return True
